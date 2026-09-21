@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>csync</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #fff; --ink: #1b1f24; --muted: #6b7480;
+    --line: #dfe3e8; --accent: #1f6feb; --warn: #a15c00; --bad: #b42318;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14171c; --panel: #1b1f26; --ink: #e7eaee; --muted: #98a2b0;
+      --line: #2a3039; --accent: #5aa0ff; --warn: #e0a33a; --bad: #ff7b72;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.45 system-ui, "Segoe UI", sans-serif;
+         background: var(--bg); color: var(--ink); }
+  header { display: flex; align-items: baseline; gap: 16px; padding: 12px 18px;
+           border-bottom: 1px solid var(--line); background: var(--panel); }
+  header h1 { font-size: 16px; margin: 0; letter-spacing: .02em; }
+  header .server { color: var(--muted); font-size: 12px; }
+  header a { margin-left: auto; color: var(--accent); text-decoration: none; font-size: 12px; }
+  main { display: grid; grid-template-columns: 260px 1fr; gap: 18px; padding: 18px;
+         align-items: start; }
+  @media (max-width: 760px) { main { grid-template-columns: 1fr; } }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+  .panel h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
+              color: var(--muted); margin: 0; padding: 10px 12px;
+              border-bottom: 1px solid var(--line); }
+  .dict { padding: 9px 12px; border-bottom: 1px solid var(--line); cursor: pointer; }
+  .dict:last-child { border-bottom: 0; }
+  .dict.on { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+  .dict b { display: block; font-weight: 600; font-size: 13px; }
+  .dict span { color: var(--muted); font-size: 11px; }
+  .bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+         padding: 10px 12px; border-bottom: 1px solid var(--line); }
+  button { font: inherit; padding: 5px 11px; border-radius: 6px; cursor: pointer;
+           border: 1px solid var(--line); background: var(--panel); color: var(--ink); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button:disabled { opacity: .5; cursor: default; }
+  .status { padding: 8px 12px; font-size: 12px; color: var(--muted);
+            border-bottom: 1px solid var(--line); min-height: 33px; white-space: pre-wrap; }
+  .status.bad { color: var(--bad); }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--line);
+           white-space: nowrap; }
+  th { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+  tr.dirty td:first-child::before { content: "\25CF"; color: var(--warn); margin-right: 5px; }
+  tr.gone { opacity: .45; text-decoration: line-through; }
+  .scroll { overflow-x: auto; }
+  form.add { display: none; gap: 8px; flex-wrap: wrap; padding: 12px;
+             border-bottom: 1px solid var(--line); }
+  form.add.on { display: flex; }
+  form.add label { display: flex; flex-direction: column; font-size: 11px; color: var(--muted); }
+  form.add input, form.add select { font: inherit; color: var(--ink); background: var(--bg);
+             border: 1px solid var(--line); border-radius: 5px; padding: 4px 6px; min-width: 130px; }
+  .x { color: var(--bad); cursor: pointer; border: 0; background: none; padding: 0 4px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>csync</h1>
+  <div class="server">{{ server }}</div>
+  <a href="/api-docs" target="_blank">CSWeb API reference &rarr;</a>
+</header>
+
+<main>
+  <section class="panel">
+    <h2>Dictionaries</h2>
+    <div id="dicts"></div>
+  </section>
+
+  <section class="panel">
+    <div class="bar">
+      <button id="down">Sync down</button>
+      <button id="up" class="primary">Sync up</button>
+      <button id="toggle-add">Add case</button>
+      <label style="margin-left:auto;font-size:12px;color:var(--muted)">
+        <input type="checkbox" id="show-deleted"> show deleted
+      </label>
+    </div>
+    <form class="add" id="add"></form>
+    <div class="status" id="status">Pick a dictionary.</div>
+    <div class="scroll"><table id="table"></table></div>
+  </section>
+</main>
+
+<script>
+// Small and deliberately plain: one fetch helper, one render per panel.
+const $ = (id) => document.getElementById(id);
+let current = null, shape = null;
+
+const api = async (url, opts = {}) => {
+  const r = await fetch(url, { headers: { "Content-Type": "application/json" }, ...opts });
+  const body = await r.json().catch(() => ({ error: r.statusText }));
+  if (!r.ok) throw new Error(body.error || r.statusText);
+  return body;
+};
+
+const say = (text, bad = false) => {
+  $("status").textContent = text;
+  $("status").classList.toggle("bad", bad);
+};
+
+async function loadDictionaries() {
+  const { dictionaries, error } = await api("/ui/dictionaries");
+  if (error) say(error, true);
+  $("dicts").innerHTML = dictionaries.map((d) => `
+    <div class="dict ${d.name === current ? "on" : ""}" data-name="${d.name}">
+      <b>${d.name}</b>
+      <span>${d.server_cases ?? "?"} on server &middot; ${d.total} here${d.dirty ? ` &middot; ${d.dirty} to send` : ""}</span>
+    </div>`).join("") || "<div class='dict'><span>none yet</span></div>";
+  document.querySelectorAll(".dict[data-name]").forEach((el) =>
+    el.onclick = () => select(el.dataset.name));
+}
+
+async function select(name) {
+  current = name;
+  await loadDictionaries();
+  shape = await api(`/ui/${encodeURIComponent(name)}/shape`);
+  buildForm();
+  await loadCases();
+}
+
+// The form is generated from the dictionary, so it fits any survey.
+function formItems() {
+  const flat = [...shape.ids];
+  shape.records.filter((r) => !r.repeating).forEach((r) => flat.push(...r.items));
+  return flat;
+}
+
+function buildForm() {
+  $("add").innerHTML = formItems().map((i) => `
+    <label>${i.label}${i.id ? " *" : ""}
+      ${i.values
+        ? `<select name="${i.name}"><option value=""></option>` +
+          i.values.map(([v, l]) => `<option value="${v}">${l}</option>`).join("") + "</select>"
+        : `<input name="${i.name}" maxlength="${i.length}">`}
+    </label>`).join("") + `<label>&nbsp;<button class="primary" type="submit">Save locally</button></label>`;
+}
+
+async function loadCases() {
+  const all = $("show-deleted").checked ? "1" : "0";
+  const { cases, counts } = await api(`/ui/${encodeURIComponent(current)}/cases?all=${all}`);
+  const cols = formItems();
+  $("table").innerHTML = `
+    <thead><tr><th>Key</th>${cols.map((c) => `<th>${c.label}</th>`).join("")}<th></th></tr></thead>
+    <tbody>${cases.map((c) => `
+      <tr class="${c.dirty ? "dirty" : ""} ${c.deleted ? "gone" : ""}">
+        <td>${c.key.trim()}</td>
+        ${cols.map((col) => `<td>${fmt(c.data[col.name], col)}</td>`).join("")}
+        <td><button class="x" data-key="${encodeURIComponent(c.key)}" title="Delete">&times;</button></td>
+      </tr>`).join("")}</tbody>`;
+  document.querySelectorAll(".x").forEach((b) => b.onclick = () => remove(b.dataset.key));
+  say(`${counts.total} cases, ${counts.dirty} waiting to go up`
+      + (counts.pending_deletes ? `, ${counts.pending_deletes} deletion(s) pending` : ""));
+}
+
+const fmt = (v, col) => {
+  if (v === null || v === undefined || v === "") return "";
+  const hit = (col.values || []).find(([code]) => String(code) === String(v));
+  return hit ? hit[1] : String(v);
+};
+
+async function remove(key) {
+  try {
+    await api(`/ui/${encodeURIComponent(current)}/cases/${key}`, { method: "DELETE" });
+    await loadCases(); await loadDictionaries();
+    say("Marked deleted - it goes up as a tombstone on the next sync up.");
+  } catch (e) { say(e.message, true); }
+}
+
+async function run(action, label) {
+  if (!current) return say("Pick a dictionary first.", true);
+  const buttons = document.querySelectorAll(".bar button");
+  buttons.forEach((b) => b.disabled = true);
+  say(label + "...");
+  try {
+    const report = await api(`/ui/${encodeURIComponent(current)}/${action}`, { method: "POST" });
+    say(JSON.stringify(report, null, 1));
+    await loadCases(); await loadDictionaries();
+  } catch (e) { say(e.message, true); }
+  buttons.forEach((b) => b.disabled = false);
+}
+
+$("down").onclick = () => run("sync-down", "Pulling from the server");
+$("up").onclick = () => run("sync-up", "Sending to the server");
+$("toggle-add").onclick = () => $("add").classList.toggle("on");
+$("show-deleted").onchange = () => current && loadCases();
+$("add").onsubmit = async (e) => {
+  e.preventDefault();
+  const row = Object.fromEntries(new FormData($("add")).entries());
+  try {
+    const saved = await api(`/ui/${encodeURIComponent(current)}/cases`,
+                            { method: "POST", body: JSON.stringify(row) });
+    $("add").reset();
+    await loadCases(); await loadDictionaries();
+    say(`Saved ${saved.key.trim()} locally - press "Sync up" to send it.`);
+  } catch (err) { say(err.message, true); }
+};
+
+loadDictionaries();
+</script>
+</body>
+</html>

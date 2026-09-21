@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CSWeb Sync API</title>
+<!-- Swagger UI from a CDN: this page needs internet the first time.
+     The spec itself (csweb-swagger.json) is in this folder and needs nothing. -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/5.17.14/swagger-ui.min.css">
+<style>
+  body { margin: 0; font-family: system-ui, "Segoe UI", sans-serif; }
+  .note { padding: 10px 16px; background: #10243e; color: #dbe7f5; font-size: 13px; }
+  .note a { color: #8cc2ff; }
+  .fallback { padding: 16px; font-size: 14px; }
+</style>
+</head>
+<body>
+<div class="note">
+  <strong>CSPro Sync API 2.0</strong> — the REST API CSEntry uses, and the one
+  <code>csync</code> talks to. Base path <code>{server}/api</code>; every call
+  but <code>/token</code> needs a bearer token.
+  Raw spec: <a href="csweb-swagger.json">csweb-swagger.json</a>.
+</div>
+<div id="ui"></div>
+<div class="fallback" id="fallback" hidden>
+  Swagger UI could not be loaded (no internet?). Open
+  <a href="csweb-swagger.json">csweb-swagger.json</a> directly, or read
+  <a href="csweb-sync-api.md">csweb-sync-api.md</a> for the same endpoints in prose.
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/5.17.14/swagger-ui-bundle.min.js"></script>
+<script>
+  if (window.SwaggerUIBundle) {
+    // Served from the web UI at /api-docs, the spec sits at the site root;
+    // opened as a file it sits next to this page.  Try both.
+    const url = location.protocol === "file:" ? "csweb-swagger.json" : "/csweb-swagger.json";
+    SwaggerUIBundle({ url, dom_id: "#ui", deepLinking: true, docExpansion: "list" });
+  } else {
+    document.getElementById("fallback").hidden = false;
+  }
+</script>
+</body>
+</html>

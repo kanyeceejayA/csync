@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "csync"
+version = "0.1.0"
+description = "Sync any CSPro dictionary between a CSWeb server and a local SQLite store"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []                     # the library is standard-library only
+
+[project.optional-dependencies]
+web = ["flask>=3.0"]
+dev = ["flask>=3.0", "pytest>=8.0"]
+
+[project.scripts]
+csync = "csync.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["csync*"]
+
+[tool.setuptools.package-data]
+csync = ["templates/*.html"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -1,0 +1,107 @@
+{
+  "software": "CSPro",
+  "version": 8.0,
+  "fileType": "dictionary",
+  "name": "SAMPLE_ASSIGNMENTS",
+  "labels": [{ "text": "Sample Assignments" }],
+  "recordType": { "start": 1, "length": 1 },
+  "defaults": { "decimalMark": true, "zeroFill": true },
+  "relativePositions": true,
+  "levels": [
+    {
+      "name": "SAMPLE_ASSIGNMENTS_LEVEL",
+      "labels": [{ "text": "Assignment Level" }],
+      "ids": {
+        "items": [
+          {
+            "name": "SA_DISTRICT",
+            "labels": [{ "text": "District code" }],
+            "contentType": "numeric",
+            "start": 2,
+            "length": 3,
+            "zeroFill": true
+          },
+          {
+            "name": "SA_EA",
+            "labels": [{ "text": "Enumeration area" }],
+            "contentType": "numeric",
+            "start": 5,
+            "length": 5,
+            "zeroFill": true
+          }
+        ]
+      },
+      "records": [
+        {
+          "name": "SAMPLE_ASSIGNMENTS_REC",
+          "labels": [{ "text": "Assignment" }],
+          "recordType": "1",
+          "occurrences": { "required": true, "maximum": 1 },
+          "items": [
+            {
+              "name": "SA_STAFF_CODE",
+              "labels": [{ "text": "Staff code" }],
+              "contentType": "alpha",
+              "length": 12
+            },
+            {
+              "name": "SA_STAFF_NAME",
+              "labels": [{ "text": "Staff name" }],
+              "contentType": "alpha",
+              "length": 40
+            },
+            {
+              "name": "SA_ROLE",
+              "labels": [{ "text": "Role" }],
+              "contentType": "numeric",
+              "length": 1,
+              "zeroFill": true,
+              "valueSets": [
+                {
+                  "name": "SA_ROLE_VS1",
+                  "labels": [{ "text": "Role" }],
+                  "values": [
+                    { "labels": [{ "text": "INTERVIEWER" }], "pairs": [{ "value": 1 }] },
+                    { "labels": [{ "text": "SUPERVISOR" }], "pairs": [{ "value": 2 }] }
+                  ]
+                }
+              ]
+            },
+            {
+              "name": "SA_HOUSEHOLDS",
+              "labels": [{ "text": "Households to visit" }],
+              "contentType": "numeric",
+              "length": 4,
+              "zeroFill": true
+            },
+            {
+              "name": "SA_STATUS",
+              "labels": [{ "text": "Fieldwork status" }],
+              "contentType": "numeric",
+              "length": 1,
+              "zeroFill": true,
+              "valueSets": [
+                {
+                  "name": "SA_STATUS_VS1",
+                  "labels": [{ "text": "Fieldwork status" }],
+                  "values": [
+                    { "labels": [{ "text": "NOT STARTED" }], "pairs": [{ "value": 1 }] },
+                    { "labels": [{ "text": "IN PROGRESS" }], "pairs": [{ "value": 2 }] },
+                    { "labels": [{ "text": "COMPLETE" }], "pairs": [{ "value": 3 }] }
+                  ]
+                }
+              ]
+            },
+            {
+              "name": "SA_DATE_ASSIGNED",
+              "labels": [{ "text": "Date assigned (YYYYMMDD)" }],
+              "contentType": "numeric",
+              "length": 8,
+              "zeroFill": true
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
