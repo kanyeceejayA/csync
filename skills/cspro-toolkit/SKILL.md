@@ -138,7 +138,8 @@ Two caveats before treating it as a compile *check*: it exits as soon as the bui
 deploy is triggered, so its **exit code is not a compile verdict**; and how a logic
 error surfaces there is untested. Verify the build instead of trusting the exit code:
 confirm the output `.pen` timestamp moved and that it contains a string you just
-added (a `.pen` is bzip2-compressed UTF-16LE — decompress and search it).
+added (a `.pen` is bzip2-compressed; search the decompressed bytes for the
+string as UTF-8 *and* UTF-16LE - 8.1 builds were seen storing UTF-8).
 
 ## Deploying an application — `.csds` + its `AppType=Deploy` pff
 

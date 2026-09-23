@@ -269,7 +269,8 @@ If `buildTime` is newer than the unzipped file's `lastModified`, the unzip never
 For a definitive check, download the package and byte-compare every member against
 `/files/apps/{NAME}/{path}/content` (URL-quote paths — some contain spaces).
 
-`.pen` files are **bzip2** (`BZh9` magic) and their strings are **UTF-16LE**, so you
+`.pen` files are **bzip2** (`BZh9` magic). Their strings were UTF-16LE in older builds
+and UTF-8 in CSPro 8.1 builds (seen 2026-09-23) - search for both. So you
 can read a build's identity without any CSPro tooling:
 
 ```python
@@ -277,7 +278,7 @@ import bz2, re
 d = bz2.decompress(open('Menu.pen','rb').read())
 print(sorted({m.group().decode('utf-16-le')          # version banner text
               for m in re.finditer(rb'1\x00\.\x000\x00\.\x00[0-9]\x00', d)}))
-print('N_TRIP'.encode('utf-16-le') in d)             # is a given change present?
+print(any(s in d for s in ('N_TRIP'.encode('utf-16-le'), b'N_TRIP')))  # is a change present?
 ```
 
 Caveat: the compiler **strips comments**, so only string literals, identifiers and
