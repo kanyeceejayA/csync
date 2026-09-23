@@ -293,8 +293,10 @@ Key facts (details in the reference):
   body instead of the JSON `{"code","description"}` envelope is the tell. This is
   the only API route back after `dict-delete`, so do not let it look unimplemented.
 - **Cases page via headers**, not query params: `x-csw-case-range-count` (limit),
-  `x-csw-case-range-start-after` (GUID cursor), and an `etag` → `If-Match` for
-  fetching only new/changed cases (`412` = etag no longer known, re-pull fresh).
+  `x-csw-case-range-start-after` (GUID cursor, sent WITH the page's revision), and
+  the response revision (`ETag` / `x-csw-chunk-max-revision`) sent back as
+  `x-csw-if-revision-exists` for only new/changed cases - never `If-Match`, which
+  the server ignores (`412` = revision no longer known, re-pull fresh).
 - **This closes the loop with the linter:** a `.dcf` pulled with `dict-get` is the
   same dictionary you lint locally — diff it against the project `.dcf` to catch
   server-vs-local drift, or run `cspro_lint.py` on it.

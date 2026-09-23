@@ -30,7 +30,7 @@ COMMANDS
                                                             the trailing slash is required)
     dict-delete NAME            DELETE /dictionaries/NAME  (deletes data too!)
     cases NAME [opts]           GET /dictionaries/NAME/cases
-        --universe U  --count N  --start-after GUID  --device ID  --if-match ETAG
+        --universe U  --count N  --start-after GUID  --device ID  --since-revision REV
     case-get NAME CASEID [--out F]   GET /dictionaries/NAME/cases/CASEID
     syncs NAME [opts]           GET /dictionaries/NAME/syncs (sync history)
         --from RFC3339  --to RFC3339  --device ID  --limit N  --offset N
@@ -179,7 +179,9 @@ def main(argv=None):
     sp = sub.add_parser("cases")
     sp.add_argument("name")
     sp.add_argument("--universe"); sp.add_argument("--count", type=int)
-    sp.add_argument("--start-after"); sp.add_argument("--device"); sp.add_argument("--if-match")
+    sp.add_argument("--start-after"); sp.add_argument("--device")
+    sp.add_argument("--since-revision", "--if-match", dest="since_revision",
+                    help="only cases changed after this server revision (x-csw-if-revision-exists)")
 
     sp = sub.add_parser("case-get"); sp.add_argument("name"); sp.add_argument("caseid"); sp.add_argument("--out")
 
@@ -249,14 +251,17 @@ def main(argv=None):
         if args.count is not None: h["x-csw-case-range-count"] = str(args.count)
         if args.start_after: h["x-csw-case-range-start-after"] = args.start_after
         if args.device:      h["x-csw-device"] = args.device
-        if args.if_match:    h["If-Match"] = args.if_match
+        # the server reads x-csw-if-revision-exists, never If-Match; with
+        # --start-after it must be the previous page's chunk max revision
+        if args.since_revision: h["x-csw-if-revision-exists"] = args.since_revision.strip('"')
         st, hd, b = c._request("GET", f"/dictionaries/{_enc(args.name)}/cases", headers=h)
         rng = hd.get("x-csw-case-range-count")
         if rng:
             _eprint(f"x-csw-case-range-count: {rng}   (returned/total)")
-        etag = hd.get("etag") or hd.get("ETag")
+        etag = next((v for k, v in hd.items()
+                     if k.lower() in ("x-csw-chunk-max-revision", "etag")), None)
         if etag:
-            _eprint(f"etag: {etag}   (pass as --if-match next time for deltas)")
+            _eprint(f"revision: {etag}   (pass as --since-revision next time for deltas)")
         return _out(st, hd, b, args)
 
     if args.cmd == "case-get":

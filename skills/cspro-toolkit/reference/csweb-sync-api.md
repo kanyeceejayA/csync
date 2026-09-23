@@ -143,9 +143,14 @@ response headers:
 - `x-csw-case-range-start-after` — a case GUID; returns only cases whose GUID is
   alphabetically greater. This is the paging cursor: pass the last GUID you got.
 - `x-csw-case-range-count` (**response**) — `x/y` = returned / total matching.
-- `etag` (response) — a server revision marker. Send it back as `If-Match` on the
-  next call to get **only** cases added/changed since. Server returns `412` if it
-  doesn't recognise the etag (revision pruned) — then re-pull without `If-Match`.
+- `ETag` / `x-csw-chunk-max-revision` (response) — the server revision the page
+  reached (nginx strips `ETag`, hence the custom header). Send it back as
+  **`x-csw-if-revision-exists`** to get **only** cases added/changed since - the
+  server never reads `If-Match`. `412` = the server does not know that revision
+  (it was reset) - re-pull without it. To page, send the next request with
+  `x-csw-case-range-start-after` = last GUID **and** `x-csw-if-revision-exists` =
+  that page's revision: the server selects `(revision = R and uuid > G) or
+  revision > R`, so the GUID alone (R = 0) serves the first page again.
 - `x-csw-exclude-revisions` — skip cases from listed revisions (a device avoiding
   re-downloading what it just uploaded).
 
