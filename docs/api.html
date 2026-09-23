@@ -16,10 +16,13 @@
 </head>
 <body>
 <div class="note">
-  <strong>CSPro Sync API 2.0</strong> — the REST API CSEntry uses, and the one
+  <strong>CSPro Sync API</strong> — the REST API CSEntry uses, and the one
   <code>csync</code> talks to. Base path <code>{server}/api</code>; every call
   but <code>/token</code> needs a bearer token.
-  Raw spec: <a href="csweb-swagger.json">csweb-swagger.json</a>.
+  Showing: <a href="?spec=80" id="s80">CSWeb 8.0 (API 2.0)</a> ·
+  <a href="?spec=81" id="s81">CSWeb 8.1 (API 3.0)</a>.
+  The 8.1 file still says 2.0.0 and omits the 8.1-only routes and the nested
+  sign-in answer — see <a href="csweb-sync-api.md">csweb-sync-api.md</a>.
 </div>
 <div id="ui"></div>
 <div class="fallback" id="fallback" hidden>
@@ -29,10 +32,13 @@
 </div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/5.17.14/swagger-ui-bundle.min.js"></script>
 <script>
+  const is81 = new URLSearchParams(location.search).get("spec") === "81";
+  const file = is81 ? "csweb81-swagger.json" : "csweb-swagger.json";
+  document.getElementById(is81 ? "s81" : "s80").style.fontWeight = "bold";
   if (window.SwaggerUIBundle) {
     // Served from the web UI at /api-docs, the spec sits at the site root;
     // opened as a file it sits next to this page.  Try both.
-    const url = location.protocol === "file:" ? "csweb-swagger.json" : "/csweb-swagger.json";
+    const url = location.protocol === "file:" ? file : "/" + file;
     SwaggerUIBundle({ url, dom_id: "#ui", deepLinking: true, docExpansion: "list" });
   } else {
     document.getElementById("fallback").hidden = false;

@@ -37,7 +37,11 @@ def cmd_check(s, args):
         print("\nno server configured - set CSWEB_URL and CSWEB_USER in .env")
         return 1
     info = s.client.server()
-    print(f"\nconnected: apiVersion {info.get('apiVersion')} deviceId {info.get('deviceId')}")
+    generation = "CSWeb 8.1" if s.client.case_api >= 3 else "CSWeb 8.0"
+    print(f"\nconnected: apiVersion {info.get('apiVersion')} ({generation}) "
+          f"deviceId {info.get('deviceId')}")
+    if s.client.role:                        # only CSWeb 8.1 reports it
+        print(f"role     {s.client.role}")
     return 0
 
 

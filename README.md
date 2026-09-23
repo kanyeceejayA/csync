@@ -6,7 +6,7 @@ Python — plus a small command line, a tiny web page, and an example assignment
 ```
 CSEntry tablets  <--sync-->  CSWeb server  <--csync-->  local SQLite store  <-->  your code
                                   ^                            ^
-                          docs/csweb-swagger.json       data/csync.db (plain SQLite)
+                   docs/csweb(81)-swagger.json          data/csync.db (plain SQLite)
 ```
 
 The point: **a `.dcf` describes a survey completely**, so none of the core functions need to
@@ -123,36 +123,53 @@ syncs either way. It also serves the CSWeb API reference at
 
 - **[`docs/api.html`](docs/api.html)** — Swagger UI for the spec. Open the file, or visit
   `/api-docs` while the web UI is running.
-- **[`docs/csweb-swagger.json`](docs/csweb-swagger.json)** — the full OpenAPI 2.0 spec
-  ("CSPro Sync" 2.0), the same API CSEntry itself uses.
+- **[`docs/csweb-swagger.json`](docs/csweb-swagger.json)** — the OpenAPI 2.0 spec of
+  CSWeb 8.0 (REST API 2.0), the same API CSEntry itself uses.
+- **[`docs/csweb81-swagger.json`](docs/csweb81-swagger.json)** — the spec shipped with
+  CSWeb 8.1.2 (REST API 3.0). It still says 2.0.0 and leaves out what 8.1 added; the
+  notes below and in `docs/csweb-sync-api.md` fill that in.
 - **[`docs/csweb-sync-api.md`](docs/csweb-sync-api.md)** — the short version: auth, every
   endpoint, the header-based paging, and the quirks that cost time to find (the trailing
-  slash on `POST /dictionaries/`, HTML error bodies, the cursor that loops, tombstones
+  slash on `POST /dictionaries/`, HTML error bodies, the paging headers, tombstones
   instead of `DELETE`).
 
-## CSPro / CSWeb 8.0 vs 8.1 — anything to change?
+## CSWeb 8.0 and 8.1 — both supported
 
-**No.** The sync REST API is identical in 8.0 and 8.1: same base path, same OAuth2 password
-grant with the same built-in `cspro_android` / `cspro` client, same dictionary and case
-routes, same paging headers. `csync` runs against either unchanged, and the bundled swagger
-describes both. Same for the files: both write JSON `.dcf` dictionaries and `.csdb` files at
-schema version 3, which is what `csync/csdb.py` reads (`csdb.schema_info()` reports the
-schema of any file, so a future change is easy to spot).
+CSWeb 8.1 is **not** the same API with a new number: it is REST API 3.0, and a client
+written for 8.0 cannot sign in to it or send it a case. `csync` asks `GET /server` for
+`apiVersion` and speaks whichever the server does — the same switch CSEntry makes between
+its `SyncCaseV2` and `SyncCaseV3` serializers (`CSWeb.case_api` is 2 or 3):
 
-Two 8.1 differences are worth knowing:
+| | CSWeb 8.0 (API 2.0) | CSWeb 8.1 (API 3.0) |
+|---|---|---|
+| `POST /token` answer | `{access_token, …}` | `{user: {id, roleName}, credentials: {access_token, …}}` |
+| case id / key | `id`, `caseids` | `uuid`, `key` (both required, with `clock`) |
+| case data | `"level-1"`: a JSON **string**; ids under `"id"`; a single record is an object | `"<LEVEL NAME>"`: an **object**; ids at its top; every record an array; every value `{"code": v}` |
+| `GET /dictionaries` | `name`, `label`, `caseCount` | also `dictionaryName`, `modifiedTime` |
 
-1. **8.1 validates the username at `/token`** against `^[a-zA-Z0-9_\-]{4,64}$` and answers
-   `400 invalid_request` — "Invalid username format." A username containing a dot or `@`, or
-   shorter than four characters, works on 8.0 and fails on 8.1. If sign-in breaks right after
-   a server upgrade, this is the first thing to check.
-2. **The CSWeb database changed** — MySQL 8 is now the minimum, some internal tables and
-   columns were renamed, and there is a new `cspro_messages` table. Invisible over the API;
-   it only matters if you query the CSWeb database directly.
+Checked end to end against a live CSWeb 8.1.2 (register, push, read back, pull into a
+second store, update, tombstone) and a live 8.0 server.
+
+Also new in 8.1:
+
+1. **Usernames are validated at `/token`** against `^[a-zA-Z0-9_\-]{4,64}$` before the
+   password: a dot, an `@` or fewer than four characters gets `400 invalid_request` —
+   "Invalid username format."
+2. **Roles:** Standard User, Administrator and the new Developer. Standard User reads and
+   writes data but cannot deploy apps or register dictionaries.
+3. **New routes:** `GET /dictionaries/{name}/metadata`,
+   `GET /dictionaries/{name}/binary-data/{signature}`, `POST /messages/`.
+4. **The CSWeb database changed** — MySQL 8 is now the minimum, some internal tables and
+   columns were renamed, and there is a new `cspro_messages` table.
+
+Local files are unaffected: CSPro 8.0 and 8.1 both write JSON `.dcf` dictionaries and
+`.csdb` files at schema version 3, which is what `csync/csdb.py` reads
+(`csdb.schema_info()` reports the schema of any file, so a future change is easy to spot).
 
 ## How syncing works (the five things worth knowing)
 
 1. **The case key.** CSPro identifies a case by its id items concatenated into a fixed-width
-   string (`caseids`), zero-filled exactly as the dictionary says: district `101` + EA `7`
+   string (`caseids` on 8.0, `key` on 8.1), zero-filled exactly as the dictionary says: district `101` + EA `7`
    → `"10100007"`. `csync` builds it for you; it is also the key you pass to `update_case`,
    `remove_case` and `show`.
 2. **Dirty vs clean.** Each stored case carries the content hash the server confirmed and
@@ -287,12 +304,15 @@ a = Assignments(fields=Fields(
 ## Tests
 
 ```bash
-python -m pytest -q        # 24 tests, no server needed
+python -m pytest -q        # 46 tests, no server needed
 ```
 
 The suite runs against a fake CSWeb that keeps the cases exactly as they arrive, so the
-tests also pin the wire format down: a single-occurrence record must be an object, the key
-must be zero-filled, the clock must be bumped, a delete must go up as a tombstone.
+tests also pin the wire format down: the key must be zero-filled, the clock must be bumped,
+a delete must go up as a tombstone. Every sync test runs twice, as CSWeb 8.0 (V2: a
+single-occurrence record is an object) and as CSWeb 8.1 (V3: `uuid`/`key`/`clock` required,
+records as arrays, values as `{"code": v}`); `tests/test_client.py` covers both sign-in
+answers and the delta/paging headers.
 
 ## Repo layout
 
@@ -309,7 +329,8 @@ csync/
   web.py             the optional Flask page
   templates/index.html
   modules/assignments.py    the example domain module
-docs/                swagger spec + viewer + the short API notes
+docs/                swagger specs (8.0, 8.1) + viewer + the short API notes
+skills/              the cspro-toolkit Claude Code skill (install: skills/README.md)
 examples/            sample .dcf, generated .csdb, CSV, runnable demos
 tests/               pytest suite with a fake CSWeb server
 ```

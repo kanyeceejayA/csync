@@ -46,6 +46,10 @@ def create_app(settings: Settings | None = None) -> Flask:
     def swagger():
         return send_from_directory(DOCS, "csweb-swagger.json")
 
+    @app.get("/csweb81-swagger.json")
+    def swagger81():
+        return send_from_directory(DOCS, "csweb81-swagger.json")
+
     # ---- data ---------------------------------------------------------------
     @app.get("/ui/dictionaries")
     def dictionaries():

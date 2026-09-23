@@ -1,9 +1,16 @@
 """A small CSWeb sync-API client - standard library only, no pip install.
 
-The API is the one CSEntry itself uses ("CSPro Sync" v2.0): everything lives
-under `{server}/api`, and every call except `/token` needs a bearer token.
-The full spec ships with this repo - see `docs/csweb-swagger.json`, or open
-`docs/api.html` (also served at /api-docs when the web UI is running).
+The API is the one CSEntry itself uses: everything lives under
+`{server}/api`, and every call except `/token` needs a bearer token.  Two
+generations are spoken, told apart by `GET /server` -> `apiVersion`:
+
+  * 2.0 - CSWeb 8.0: spec in `docs/csweb-swagger.json`.
+  * 3.0 - CSWeb 8.1: spec in `docs/csweb81-swagger.json` (the file still says
+    2.0.0 and omits the 8.1-only routes; `docs/csweb-sync-api.md` lists what
+    changed).  The sign-in answer is nested, and cases use the V3 format -
+    see `csync.dictionary` for both case shapes.
+
+Open `docs/api.html` (also served at /api-docs when the web UI is running).
 
 Facts baked in here, learned from real CSWeb servers:
   * `POST /dictionaries/` needs its trailing slash (Symfony route).  Without
@@ -15,6 +22,11 @@ Facts baked in here, learned from real CSWeb servers:
   * `DELETE /dictionaries/{d}/cases/{id}` is unreliable on some builds; the
     safe way to remove a case is a tombstone (`deleted: true`), which is also
     what tablets expect.  See `csync.sync.remove_case`.
+  * "Only what changed" is `x-csw-if-revision-exists: <revision>`; the server
+    never reads `If-Match`.  A page after the first repeats that header with
+    the previous page's `x-csw-chunk-max-revision` (nginx strips `ETag`)
+    alongside `x-csw-case-range-start-after` - the start-after id on its own
+    restarts from revision 0 and serves the first page again.
 """
 from __future__ import annotations
 
@@ -24,6 +36,8 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+
+from .dictionary import case_guid
 
 #: The OAuth client every CSWeb install ships with - not a per-user secret.
 CLIENT_ID, CLIENT_SECRET = "cspro_android", "cspro"
@@ -57,6 +71,8 @@ class CSWeb:
         self._ssl = None if verify_tls else ssl._create_unverified_context()
         self._token = None
         self._token_expires = 0.0
+        self._api_version = None
+        self.role = None                    # the account's role name (CSWeb 8.1 only)
 
     # ---- plumbing -----------------------------------------------------------
     def token(self) -> str:
@@ -73,12 +89,16 @@ class CSWeb:
             data = json.loads(text)
         except ValueError:
             data = {}
-        if status >= 400 or not data.get("access_token"):
+        # CSWeb 8.0 answers {access_token, ...}; CSWeb 8.1 nests it:
+        # {"user": {"id", "roleName"}, "credentials": {access_token, ...}}
+        creds = data.get("credentials") if isinstance(data.get("credentials"), dict) else data
+        if status >= 400 or not creds.get("access_token"):
             hint = ("the server returned an HTML error page" if "<html" in text.lower()
                     else data.get("error_description") or data.get("message") or text[:200])
             raise CSWebError(f"CSWeb sign-in failed (HTTP {status}): {hint}", status, text)
-        self._token = data["access_token"]
-        self._token_expires = time.time() + max(60, int(data.get("expires_in", 3600)) - 120)
+        self._token = creds["access_token"]
+        self._token_expires = time.time() + max(60, int(creds.get("expires_in", 3600)) - 120)
+        self.role = (data.get("user") or {}).get("roleName") or self.role
         return self._token
 
     def _raw(self, method, path, body=None, headers=None, auth=True):
@@ -118,7 +138,26 @@ class CSWeb:
     # ---- server & dictionaries ---------------------------------------------
     def server(self) -> dict:
         """`{"deviceId": ..., "apiVersion": ...}` - the cheapest health check."""
-        return self.request("GET", "/server")[0]
+        info = self.request("GET", "/server")[0]
+        try:
+            self._api_version = float(info.get("apiVersion"))
+        except (TypeError, ValueError, AttributeError):
+            pass
+        return info
+
+    @property
+    def api_version(self) -> float:
+        """The server's REST API version: 2.0 = CSWeb 8.0, 3.0 = CSWeb 8.1."""
+        if self._api_version is None:
+            self.server()
+            if self._api_version is None:
+                self._api_version = 2.0
+        return self._api_version
+
+    @property
+    def case_api(self) -> int:
+        """Which case format this server speaks: 2 (CSWeb 8.0) or 3 (CSWeb 8.1)."""
+        return 3 if self.api_version >= 3 else 2
 
     def dictionaries(self) -> list[dict]:
         """Every dictionary on the server with its label and case count."""
@@ -141,31 +180,35 @@ class CSWeb:
     def cases(self, name, *, universe=None, since_etag=None, page=100000, limit=None):
         """Download cases (active and tombstoned).
 
-        Returns `(cases, etag)`.  Keep the etag and pass it back as
-        `since_etag` next time to get only what changed - the server answers
-        412 if it no longer knows that etag, and this raises so the caller can
-        fall back to a full pull.
+        Returns `(cases, etag)`.  The etag is the server revision reached;
+        pass it back as `since_etag` next time to get only what changed - the
+        server answers 412 if it no longer knows that revision, and this
+        raises so the caller can fall back to a full pull.  Cases come in the
+        server's own format (V2 or V3); `csync.dictionary.case_guid/case_key`
+        and `Dictionary.from_case` read both.
         """
         out, etag, after = [], None, None
+        revision = str(since_etag).strip('"') if since_etag else None
         while True:
             headers = {"x-csw-case-range-count": str(page), "x-csw-device": self.device}
             if universe:
                 headers["x-csw-universe"] = universe
+            if revision:
+                headers["x-csw-if-revision-exists"] = revision
             if after:
                 headers["x-csw-case-range-start-after"] = after
-            if since_etag and not out:
-                headers["If-Match"] = since_etag
             payload, resp = self.request("GET", f"/dictionaries/{_q(name)}/cases",
                                          headers=headers)
             batch = payload if isinstance(payload, list) else []
             out.extend(batch)
-            etag = resp.get("etag") or resp.get("ETag") or etag
+            chunk = _header(resp, "x-csw-chunk-max-revision") or _header(resp, "etag")
+            etag = chunk.strip('"') if chunk else etag
             if not batch or len(batch) < page or (limit and len(out) >= limit):
                 break
-            last = batch[-1].get("id")
-            if last == after:                 # some builds loop instead of advancing
+            last = case_guid(batch[-1])
+            if last == after:                 # a server that ignores the paging headers
                 break
-            after = last
+            after, revision = last, etag      # next page: after this case, from this revision
         return (out[:limit] if limit else out), etag
 
     def case(self, name: str, case_id: str) -> dict:
@@ -207,6 +250,12 @@ class CSWeb:
 
 def _q(value: str) -> str:
     return urllib.parse.quote(str(value), safe="")
+
+
+def _header(headers: dict, name: str):
+    """A response header by name, whatever case the server used."""
+    name = name.lower()
+    return next((v for k, v in (headers or {}).items() if k.lower() == name), None)
 
 
 # ---- vector clocks ----------------------------------------------------------

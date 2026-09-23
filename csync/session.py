@@ -20,7 +20,7 @@ from pathlib import Path
 
 from .client import CSWeb, CSWebError, bump_clock
 from .config import Settings
-from .dictionary import Dictionary
+from .dictionary import Dictionary, case_guid, case_key
 from .store import CaseRow, Store, content_hash
 
 
@@ -224,7 +224,7 @@ class Session:
                   "unchanged": 0, "kept_local_edits": 0, "tombstones": 0, "conflicts": []}
         for case in cases:
             row = d.from_case(case)
-            key = case.get("caseids") or d.build_key(row)
+            key = case_key(case) or d.build_key(row)
             key = key.ljust(d.key_length)
             server_hash = content_hash(d.to_level1(row))
             deleted = bool(case.get("deleted"))
@@ -236,7 +236,7 @@ class Session:
                 # the local version, but remember where the server stands.
                 if local.server_hash and local.server_hash != server_hash:
                     report["conflicts"].append(key.strip())
-                local.guid, local.clock = case.get("id", local.guid), case.get("clock") or []
+                local.guid, local.clock = case_guid(case) or local.guid, case.get("clock") or []
                 local.server_hash = server_hash
                 self.store.put(local)
                 report["kept_local_edits"] += 1
@@ -249,7 +249,7 @@ class Session:
             else:
                 report["added"] += 1
             self.store.put(CaseRow(
-                dict=d.name, key=key, guid=case.get("id") or str(uuid.uuid4()),
+                dict=d.name, key=key, guid=case_guid(case) or str(uuid.uuid4()),
                 data=row, clock=case.get("clock") or [], label=case.get("label") or "",
                 deleted=deleted, server_hash=server_hash, local_hash=server_hash,
             ))
@@ -279,7 +279,8 @@ class Session:
 
         # What the server holds right now: GUIDs to reuse, clocks to dominate.
         server_cases, _ = self.client.cases(d.name)
-        by_key = {(c.get("caseids") or "").ljust(d.key_length): c for c in server_cases}
+        by_key = {case_key(c).ljust(d.key_length): c for c in server_cases}
+        api = getattr(self.client, "case_api", 2)     # 3 = CSWeb 8.1 case format
 
         bodies, sent = [], {}
         for row in rows:
@@ -287,11 +288,11 @@ class Session:
             if row.deleted and not remote:
                 self.store.purge(d.name, row.key)     # never reached the server
                 continue
-            guid = (remote or {}).get("id") or row.guid
+            guid = case_guid(remote or {}) or row.guid
             clock = bump_clock((remote or {}).get("clock") or row.clock,
                                self.settings.device, boost)
             bodies.append(d.case_body(row.data, guid, clock,
-                                      deleted=row.deleted, label=row.label))
+                                      deleted=row.deleted, label=row.label, api=api))
             sent[row.key] = (row, guid, clock, content_hash(d.to_level1(row.data)))
             report["deleted" if row.deleted else ("updated" if remote else "created")] += 1
 
@@ -311,10 +312,10 @@ class Session:
         # Read back: HTTP 200 is not proof.  A malformed record shape is
         # accepted with 200 and then stored wrong.
         after, _ = self.client.cases(d.name)
-        got = {(c.get("caseids") or "").ljust(d.key_length): c for c in after}
+        got = {case_key(c).ljust(d.key_length): c for c in after}
         for key, (row, guid, clock, hash_) in sent.items():
             c = got.get(key)
-            ok = bool(c) and c.get("id") == guid and (
+            ok = bool(c) and case_guid(c) == guid and (
                 bool(c.get("deleted")) if row.deleted
                 else (not c.get("deleted")
                       and content_hash(d.to_level1(d.from_case(c))) == hash_))

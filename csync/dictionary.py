@@ -14,13 +14,29 @@ A *case* is a plain dict, "flat row" style:
      "AA_REGION": 1, "AA_DISTRICT": 102,                       # a single record
      "ROSTER_REC": [{"X": 1}, {"X": 2}]}                       # a repeating one
 
-Wire rules for CSWeb that have bitten before, encoded in `to_level1()`:
-  * `level-1` is a JSON *string* of {"id": {ids}, "REC": {items}}.
-  * A single-occurrence record must be an object, NOT a one-element array -
-    CSWeb accepts the array with HTTP 200 and then silently mangles the case.
-  * Blank items are omitted; numbers go as numbers, alpha as trimmed strings.
-  * `caseids` is the fixed-width key: id values concatenated, zero-filled or
-    space-padded exactly as the dictionary says.
+CSWeb speaks two case formats, chosen by the server's `apiVersion`
+(`GET /server`), exactly as CSEntry chooses between its SyncCaseV2 and
+SyncCaseV3 serializers:
+
+  V2 - CSWeb 8.0 (apiVersion 2.0), built by `to_level1()`:
+    {"id", "caseids", "level-1": "<JSON string>", "deleted", "verified",
+     "label", "clock"}
+    * `level-1` is a JSON *string* of {"id": {ids}, "REC": {items}}.
+    * A single-occurrence record must be an object, NOT a one-element array -
+      CSWeb accepts the array with HTTP 200 and then silently mangles the case.
+
+  V3 - CSWeb 8.1 (apiVersion 3.0), built by `to_level_v3()`; the server
+  rejects a V2 body (it requires `uuid`, `key` and `clock`):
+    {"key", "uuid", "label", "deleted", "verified", "<LEVEL NAME>": {...},
+     "clock"}
+    * the level is an *object* under the dictionary's level name, not
+      "level-1"; the id items sit directly in it (no "id" wrapper);
+    * every record is an array of occurrences, even a single one;
+    * every value is wrapped: {"ITEM": {"code": value}}.
+
+Both: blank items are omitted; numbers go as numbers, alpha as trimmed
+strings; the key (`caseids` / `key`) is fixed width, id values concatenated,
+zero-filled or space-padded exactly as the dictionary says.
 """
 from __future__ import annotations
 
@@ -71,7 +87,7 @@ class Record:
 class Dictionary:
     """A parsed .dcf.  Build it with `Dictionary.load(path)` or `.loads(text)`."""
 
-    def __init__(self, name, label, ids, records, text="", path=None, levels=1):
+    def __init__(self, name, label, ids, records, text="", path=None, levels=1, level_name=None):
         self.name = name
         self.label = label or name
         self.ids: list[Item] = ids
@@ -79,6 +95,7 @@ class Dictionary:
         self.text = text            # original file text, for uploading to CSWeb
         self.path = path
         self.levels = levels        # only level 1 is synced (see README limitations)
+        self.level_name = level_name or f"{name}_LEVEL"   # the V3 wire key of level 1
         self.by_name: dict[str, Item] = {i.name: i for i in self.all_items()}
         self.key_length = sum(i.length for i in self.ids)
 
@@ -160,35 +177,64 @@ class Dictionary:
                     level[r.name] = built          # an object, never [object]
         return level
 
+    def to_level_v3(self, row: dict) -> dict:
+        """Flat row -> the V3 (CSWeb 8.1) level object: ids at the top, every
+        record an array of occurrences, every value {"code": value}."""
+        level = {name: {"code": v} for name, v in _clean(self.ids, row).items()}
+        for r in self.records:
+            occs = (row.get(r.name) or []) if r.repeating else [row]
+            built = [{name: {"code": v} for name, v in _clean(r.items, occ).items()}
+                     for occ in occs]
+            built = [b for b in built if b]
+            if built:
+                level[r.name] = built              # always an array in V3
+        return level
+
     def from_case(self, case: dict) -> dict:
-        """A CSWeb case -> flat row.  Tolerates the array/object mix-up on read."""
-        level = case.get("level-1") or case.get("level_1") or {}
+        """A CSWeb case -> flat row.  Reads both wire formats (V2 and V3, see
+        the module docstring) and tolerates the array/object mix-up on read."""
+        level = (case.get("level-1") or case.get("level_1")
+                 or case.get(self.level_name) or {})
         if isinstance(level, str):
             try:
                 level = json.loads(level)
             except ValueError:
                 level = {}
-        row, ids = {}, (level.get("id") or {})
+        # V2 wraps the id items in "id"; V3 puts them straight in the level
+        ids = level.get("id") if isinstance(level.get("id"), dict) else level
+        row = {}
         for i in self.ids:
-            row[i.name] = coerce(i, ids.get(i.name))
-        if all(v in (None, "") for v in row.values()) and case.get("caseids"):
-            row.update(self.parse_key(case["caseids"]))      # older servers omit id
+            row[i.name] = coerce(i, _code(ids.get(i.name)))
+        key = case.get("caseids") or case.get("key")
+        if all(v in (None, "") for v in row.values()) and key:
+            row.update(self.parse_key(key))                  # older servers omit id
         for r in self.records:
             rec = level.get(r.name)
             if r.repeating:
                 if rec and not isinstance(rec, list):
                     rec = [rec]
-                row[r.name] = [{i.name: coerce(i, (occ or {}).get(i.name)) for i in r.items}
+                row[r.name] = [{i.name: coerce(i, _code((occ or {}).get(i.name))) for i in r.items}
                                for occ in (rec or [])]
             else:
                 if isinstance(rec, list):
                     rec = rec[0] if rec else None
                 for i in r.items:
-                    row[i.name] = coerce(i, (rec or {}).get(i.name))
+                    row[i.name] = coerce(i, _code((rec or {}).get(i.name)))
         return row
 
-    def case_body(self, row: dict, guid: str, clock: list, *, deleted=False, label="") -> dict:
-        """The JSON body CSWeb expects for one case."""
+    def case_body(self, row: dict, guid: str, clock: list, *, deleted=False, label="",
+                  api=2) -> dict:
+        """The JSON body CSWeb expects for one case.  `api` is the server's
+        case format: 2 for CSWeb 8.0, 3 for CSWeb 8.1 (see `CSWeb.case_api`)."""
+        if api >= 3:
+            body = {"key": self.build_key(row), "uuid": guid}
+            if label:
+                body["label"] = label
+            body["deleted"] = bool(deleted)
+            body["verified"] = False
+            body[self.level_name] = self.to_level_v3(row)
+            body["clock"] = clock
+            return body
         return {
             "id": guid,
             "caseids": self.build_key(row),
@@ -252,6 +298,26 @@ def coerce(item: Item, raw):
     return str(raw)[: item.length]
 
 
+def _code(value):
+    """A wire value -> the bare value.  V3 wraps it as {"code": v}; a
+    multiply-occurring item comes as a list, of which the first is kept."""
+    if isinstance(value, list):
+        value = value[0] if value else None
+    if isinstance(value, dict):
+        return value.get("code")
+    return value
+
+
+def case_guid(case: dict):
+    """The GUID of a server case in either format (V3 `uuid`, V2 `id`)."""
+    return case.get("uuid") or case.get("id")
+
+
+def case_key(case: dict) -> str:
+    """The fixed-width key of a server case in either format (V3 `key`, V2 `caseids`)."""
+    return case.get("key") or case.get("caseids") or ""
+
+
 def _clean(items, src: dict) -> dict:
     """Items of one record, blanks dropped, ready for the wire."""
     out = {}
@@ -298,7 +364,7 @@ def _from_json(doc: dict, text: str, path) -> Dictionary:
         records.append(Record(r["name"], _text(r.get("labels")) or r["name"],
                               int((r.get("occurrences") or {}).get("maximum", 1)), items))
     return Dictionary(doc["name"], _text(doc.get("labels")), ids, records,
-                      text=text, path=path, levels=len(levels))
+                      text=text, path=path, levels=len(levels), level_name=lvl.get("name"))
 
 
 def _text(labels) -> str:
@@ -308,7 +374,7 @@ def _text(labels) -> str:
 # ---- CSPro <=7.x INI --------------------------------------------------------
 def _from_ini(text: str, path) -> Dictionary:
     """Walk the INI sections in order; [Item]s belong to the section above them."""
-    state = {"name": "", "label": "", "zero_fill": False, "target": None}
+    state = {"name": "", "label": "", "zero_fill": False, "target": None, "level_name": None}
     ids: list[Item] = []
     records: list[Record] = []
     section, cur, levels = None, {}, 0
@@ -323,6 +389,8 @@ def _from_ini(text: str, path) -> Dictionary:
             state["zero_fill"] = cur.get("zerofill", "no").lower() == "yes"
         elif section in ("level", "iditems"):
             state["target"] = "ids"        # the [Item]s after [IdItems] are the case key
+            if section == "level" and state["level_name"] is None:
+                state["level_name"] = cur.get("name")      # level 1's name: the V3 wire key
         elif section == "record":
             records.append(Record(cur.get("name", ""), cur.get("label", ""),
                                   int(cur.get("maxrecords", 1) or 1), []))
@@ -367,7 +435,7 @@ def _from_ini(text: str, path) -> Dictionary:
                 cur[k] = v.strip()
     flush()
     return Dictionary(state["name"], state["label"], ids, records,
-                      text=text, path=path, levels=max(levels, 1))
+                      text=text, path=path, levels=max(levels, 1), level_name=state["level_name"])
 
 
 def _val(s: str):

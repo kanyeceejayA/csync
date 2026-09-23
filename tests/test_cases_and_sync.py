@@ -48,8 +48,15 @@ def test_sync_up_sends_the_right_body(session, server, row):
 
     assert report["sent"] == 1 and report["verified"] == 1 and report["created"] == 1
     body = server.posts[0]
-    assert body["caseids"] == "10100007"
-    assert isinstance(json.loads(body["level-1"])["SAMPLE_ASSIGNMENTS_REC"], dict)
+    if server.api >= 3:                                  # CSWeb 8.1: V3 case
+        assert body["key"] == "10100007" and "uuid" in body and "caseids" not in body
+        level = body["SAMPLE_ASSIGNMENTS_LEVEL"]         # keyed by the level name
+        assert level["SA_DISTRICT"] == {"code": 101}     # ids at the top, values wrapped
+        assert isinstance(level["SAMPLE_ASSIGNMENTS_REC"], list)   # records are arrays
+        assert level["SAMPLE_ASSIGNMENTS_REC"][0]["SA_STAFF_NAME"] == {"code": "Aidah Nakato"}
+    else:                                                # CSWeb 8.0: V2 case
+        assert body["caseids"] == "10100007" and "id" in body
+        assert isinstance(json.loads(body["level-1"])["SAMPLE_ASSIGNMENTS_REC"], dict)
     assert body["clock"] == [{"deviceId": "test-device", "revision": 1}]
     assert session.get_case(NAME, "10100007").dirty is False     # clean once confirmed
 
